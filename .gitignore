@@ -1,0 +1,13 @@
+.gradle/
+build/
+gradle.properties
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+*.tmp
+*.bak
+*.swp
+hs_err*.log
