@@ -6,6 +6,7 @@ A small QuPath 0.7.x extension for life science researchers who need to locate a
 
 - **Create rectangle by physical size**: Enter width and height in micrometers. The first-use defaults are 1000 × 600 µm. The rectangle is centered on the current view and selected automatically. The last entered size is remembered until QuPath closes.
 - **Export selected region as OME-TIFF**: Choose an output filename in a save dialog. An axis-aligned rectangle is cropped directly from the source at its highest resolution (`downsample = 1.0`). A rotated rectangular annotation is straightened and cropped along its own edges, so its exported width and height follow the annotation rather than its larger axis-aligned bounding box. The `.ome.tif` stores calibrated pixel sizes in micrometers. LZW lossless compression is used when supported; otherwise the export is uncompressed.
+- **Clean Windows file properties**: The exported TIFF shows blank **Title** and **Subject** fields in Windows Explorer. Its required OME-XML block remains embedded in the TIFF ImageDescription tag, including the physical pixel size; the extension only adds Windows-facing metadata that keeps those two Explorer fields empty.
 - The extension refuses physical-size creation or export when the source image has no valid micrometers-per-pixel calibration.
 
 The commands are available under **Extensions → Calibrated Region Export**. The default shortcuts are `Ctrl+Alt+1` (create) and `Ctrl+Alt+2` (export), provided QuPath has not already assigned them.

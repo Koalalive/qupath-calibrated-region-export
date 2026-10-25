@@ -2,6 +2,7 @@ package io.github.koalalive.qupath.calibratedregion;
 
 import loci.formats.MetadataTools;
 import loci.formats.in.OMETiffReader;
+import loci.formats.tiff.TiffParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import qupath.lib.images.servers.ImageServerMetadata;
@@ -14,6 +15,9 @@ import javax.imageio.ImageIO;
 import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.nio.file.Files;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -38,6 +42,13 @@ class CalibratedRegionExportExtensionTest {
             var request = CalibratedRegionExportExtension.writeCalibratedRegion(server, roi, output);
             assertEquals(20, request.getWidth());
             assertEquals(12, request.getHeight());
+
+            try (var parser = new TiffParser(output.getAbsolutePath())) {
+                var firstIfd = parser.getFirstIFD();
+                assertTrue(firstIfd.containsKey(700));
+                assertTrue(firstIfd.containsKey(40095));
+                assertTrue(firstIfd.getComment().contains("PhysicalSizeX"));
+            }
 
             try (var reader = new OMETiffReader()) {
                 var metadata = MetadataTools.createOMEXMLMetadata();
@@ -145,6 +156,29 @@ class CalibratedRegionExportExtensionTest {
                     () -> CalibratedRegionExportExtension.writeCalibratedRegion(server, rotated, output));
             assertTrue(error.getMessage().contains("equal X and Y pixel sizes"));
             assertFalse(output.exists());
+        }
+    }
+
+    @Test
+    void windowsPropertyTagsCanBeAddedToBigTiff() throws Exception {
+        var output = tempDir.resolve("synthetic-big.tif");
+        var tiff = ByteBuffer.allocate(52).order(ByteOrder.LITTLE_ENDIAN);
+        tiff.put((byte) 'I').put((byte) 'I').putShort((short) 43);
+        tiff.putShort((short) 8).putShort((short) 0).putLong(16);
+        tiff.putLong(1);
+        tiff.putShort((short) 270).putShort((short) 2).putLong(6);
+        tiff.put(new byte[] {'<', '?', 'x', 'm', 'l', 0, 0, 0});
+        tiff.putLong(0);
+        Files.write(output, tiff.array());
+
+        WindowsTiffProperties.clearTitleAndSubject(output);
+
+        try (var parser = new TiffParser(output.toString())) {
+            assertTrue(parser.isBigTiff());
+            var firstIfd = parser.getFirstIFD();
+            assertEquals("<?xml", firstIfd.getComment());
+            assertTrue(firstIfd.containsKey(700));
+            assertTrue(firstIfd.containsKey(40095));
         }
     }
 

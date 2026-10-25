@@ -250,6 +250,7 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
                 ? OMEPyramidWriter.CompressionType.LZW
                 : OMEPyramidWriter.CompressionType.UNCOMPRESSED;
         OMEPyramidWriter.writeImage(exportServer, destination.getAbsolutePath(), compression, request);
+        WindowsTiffProperties.clearTitleAndSubject(destination.toPath());
         return request;
     }
 
