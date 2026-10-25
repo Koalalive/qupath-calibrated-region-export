@@ -15,12 +15,15 @@ import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
 import qupath.lib.images.servers.ImageServer;
+import qupath.lib.images.servers.TransformedServerBuilder;
 import qupath.lib.images.writers.ome.OMEPyramidWriter;
 import qupath.lib.objects.PathObjects;
 import qupath.lib.regions.RegionRequest;
 import qupath.lib.roi.ROIs;
+import qupath.lib.roi.RectangleROI;
 import qupath.lib.roi.interfaces.ROI;
 
+import java.awt.geom.AffineTransform;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
@@ -205,11 +208,72 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
     }
 
     static void writeCalibratedRegion(ImageServer<BufferedImage> server, ROI roi, File destination) throws IOException {
-        var request = RegionRequest.createInstance(server.getPath(), 1.0, roi);
-        var compression = OMEPyramidWriter.CompressionType.LZW.supportsImage(server)
+        var rotated = RotatedRectangle.from(roi);
+        ImageServer<BufferedImage> exportServer = server;
+        RegionRequest request;
+        if (rotated == null) {
+            request = RegionRequest.createInstance(server.getPath(), 1.0, roi);
+        } else {
+            var calibration = server.getPixelCalibration();
+            double pixelWidth = calibration.getPixelWidthMicrons();
+            double pixelHeight = calibration.getPixelHeightMicrons();
+            if (Math.abs(pixelWidth - pixelHeight) > Math.max(pixelWidth, pixelHeight) * 1e-6)
+                throw new IOException("Rotated export requires equal X and Y pixel sizes. This image has "
+                        + pixelWidth + " × " + pixelHeight + " µm/px; QuPath cannot preserve its physical "
+                        + "calibration after rotating the image.");
+            exportServer = new TransformedServerBuilder(server).transform(rotated.transform()).build();
+            var outputCalibration = exportServer.getPixelCalibration();
+            if (!Double.isFinite(outputCalibration.getPixelWidthMicrons())
+                    || !Double.isFinite(outputCalibration.getPixelHeightMicrons())
+                    || Math.abs(outputCalibration.getPixelWidthMicrons() - pixelWidth) > pixelWidth * 1e-6
+                    || Math.abs(outputCalibration.getPixelHeightMicrons() - pixelHeight) > pixelHeight * 1e-6)
+                throw new IOException("QuPath did not preserve the source pixel calibration after rotation. "
+                        + "The region was not exported.");
+            request = RegionRequest.createInstance(exportServer.getPath(), 1.0, 0, 0,
+                    rotated.width(), rotated.height(), roi.getZ(), roi.getT());
+        }
+        var compression = OMEPyramidWriter.CompressionType.LZW.supportsImage(exportServer)
                 ? OMEPyramidWriter.CompressionType.LZW
                 : OMEPyramidWriter.CompressionType.UNCOMPRESSED;
-        OMEPyramidWriter.writeImage(server, destination.getAbsolutePath(), compression, request);
+        OMEPyramidWriter.writeImage(exportServer, destination.getAbsolutePath(), compression, request);
+    }
+
+    private record RotatedRectangle(int width, int height, AffineTransform transform) {
+        static RotatedRectangle from(ROI roi) {
+            if (roi instanceof RectangleROI)
+                return null;
+            var points = roi.getAllPoints();
+            if (points.size() == 5 && points.getFirst().distance(points.getLast()) < 1e-3)
+                points = points.subList(0, 4);
+            if (points.size() != 4)
+                return null;
+            var topLeft = points.get(0);
+            var bottomLeft = points.get(1);
+            var bottomRight = points.get(2);
+            var topRight = points.get(3);
+            double hx = bottomLeft.getX() - topLeft.getX();
+            double hy = bottomLeft.getY() - topLeft.getY();
+            double wx = bottomRight.getX() - bottomLeft.getX();
+            double wy = bottomRight.getY() - bottomLeft.getY();
+            double width = Math.hypot(wx, wy);
+            double height = Math.hypot(hx, hy);
+            if (width < 1 || height < 1 || Math.abs(wx * hx + wy * hy) > width * height * 1e-3
+                    || Math.hypot(topRight.getX() - topLeft.getX() - wx,
+                            topRight.getY() - topLeft.getY() - wy) > 1e-3 * width)
+                return null;
+            double ux = wx / width;
+            double uy = wy / width;
+            double handedness = wx * hy - wy * hx >= 0 ? 1 : -1;
+            double vx = -handedness * uy;
+            double vy = handedness * ux;
+            if (ux > 0.99999999995 && Math.abs(uy) < 1e-5
+                    && vy > 0.99999999995 && Math.abs(vx) < 1e-5)
+                return null;
+            var transform = new AffineTransform(ux, vx, uy, vy,
+                    -ux * topLeft.getX() - uy * topLeft.getY(),
+                    -vx * topLeft.getX() - vy * topLeft.getY());
+            return new RotatedRectangle((int) Math.round(width), (int) Math.round(height), transform);
+        }
     }
 
     private static File ensureOmeTiffExtension(File file) {
@@ -238,8 +302,8 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
 
     @Override
     public String getDescription() {
-        return "Create a rectangle in micrometers (default 1000 × 600 µm) and export selected image regions "
-                + "at native resolution as calibrated OME-TIFF for downstream analysis.";
+        return "Create a rectangle in micrometers (default 1000 × 600 µm) and export aligned or "
+                + "rotated rectangular regions as calibrated OME-TIFF for downstream analysis.";
     }
 
     @Override

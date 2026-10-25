@@ -10,8 +10,8 @@ repositories {
 qupathExtension {
     name = "qupath-extension-calibrated-region-export"
     group = "io.github.koalalive.qupath"
-    version = "1.2.0"
-    description = "Create a calibrated region of interest and export it as OME-TIFF at native resolution"
+    version = "1.3.0"
+    description = "Create a calibrated region of interest and export aligned or rotated rectangles as OME-TIFF"
     automaticModule = "io.github.koalalive.qupath.calibratedregion"
 }
 

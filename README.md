@@ -5,7 +5,7 @@ A small QuPath 0.7.x extension for life science researchers who need to locate a
 ## What it does
 
 - **Create rectangle by physical size**: Enter width and height in micrometers. The first-use defaults are 1000 × 600 µm. The rectangle is centered on the current view and selected automatically. The last entered size is remembered until QuPath closes.
-- **Export selected region as OME-TIFF**: Choose an output filename in a save dialog. The selected object's bounding rectangle is exported at the source image's highest resolution (`downsample = 1.0`) as `.ome.tif`. The OME-TIFF stores the source X and Y pixel sizes in micrometers. LZW lossless compression is used when supported; otherwise the export is uncompressed.
+- **Export selected region as OME-TIFF**: Choose an output filename in a save dialog. An axis-aligned rectangle is cropped directly from the source at its highest resolution (`downsample = 1.0`). A rotated rectangular annotation is straightened and cropped along its own edges, so its exported width and height follow the annotation rather than its larger axis-aligned bounding box. The `.ome.tif` stores calibrated pixel sizes in micrometers. LZW lossless compression is used when supported; otherwise the export is uncompressed.
 - The extension refuses physical-size creation or export when the source image has no valid micrometers-per-pixel calibration.
 
 The commands are available under **Extensions → Calibrated Region Export**. The default shortcuts are `Ctrl+Alt+1` (create) and `Ctrl+Alt+2` (export), provided QuPath has not already assigned them.
@@ -26,13 +26,15 @@ The commands are available under **Extensions → Calibrated Region Export**. Th
 
 ## Physical-size and analysis notes
 
-The extension copies QuPath's calibration from the opened image. It cannot establish whether the scanner's calibration is correct; verify that against the slide/scanner metadata. Because image boundaries fall on whole pixels, the exported physical width and height can differ from the entered rectangle size by approximately one source pixel. The output keeps native pixel spacing instead of resampling to force an exact micrometer width.
+The extension copies QuPath's calibration from the opened image. It cannot establish whether the scanner's calibration is correct; verify that against the slide/scanner metadata. Because output dimensions are whole pixels, the exported physical width and height can differ from the entered rectangle size by approximately one source pixel. An axis-aligned crop keeps the original pixels. Straightening a rotated crop resamples the image onto a grid with the same pixel spacing, which can change individual pixel values slightly; account for this in quantitative intensity analysis.
+
+QuPath's rectangular ROI does not retain orientation when a rotation makes it axis aligned again, such as 90° or 180°. In that case the extension exports the rectangle as it appears in image coordinates; it cannot reconstruct its earlier width/height order or a 180° flip. Rotated export also requires equal X and Y source pixel sizes; the extension stops with an error when they differ because QuPath's transformed server cannot preserve a faithful two-axis physical calibration in that case.
 
 For non-rectangular annotations, the export contains the **bounding rectangle**, not a masked polygon. It contains pixel data from the image server, without QuPath's display overlays, scale bar, or brightness/contrast rendering. Existing compression or processing in the scanned source cannot be reversed. This extension prepares calibrated crops; it does not perform semi-quantitative analysis or normalize staining between slides.
 
 ## Build from source
 
-Use a Java 25 JDK and run `gradlew build` (Windows: `gradlew.bat build`). The installable JAR is created in `build/libs/`. The Gradle test creates a synthetic image, exports a cropped OME-TIFF, and reads it back to check pixel dimensions and physical pixel sizes.
+Use a Java 25 JDK and run `gradlew build` (Windows: `gradlew.bat build`). The installable JAR is created in `build/libs/`. The Gradle tests create synthetic images and read the exported OME-TIFF files back to check dimensions, image pixels, and physical pixel sizes.
 
 The extension entry point is [`src/main/java/io/github/koalalive/qupath/calibratedregion/CalibratedRegionExportExtension.java`](src/main/java/io/github/koalalive/qupath/calibratedregion/CalibratedRegionExportExtension.java). The service registration file is in `src/main/resources/META-INF/services/`.
 
