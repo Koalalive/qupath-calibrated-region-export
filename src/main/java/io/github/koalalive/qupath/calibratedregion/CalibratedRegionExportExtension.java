@@ -28,6 +28,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Locale;
 
 /** Two small commands for working with calibrated physical regions in QuPath. */
@@ -199,20 +200,33 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
             return;
 
         try {
-            writeCalibratedRegion(server, roi, destination);
-            Dialogs.showInfoNotification(TITLE, "Exported calibrated OME-TIFF: " + destination.getAbsolutePath());
+            var request = writeCalibratedRegion(server, roi, destination);
+            String physicalWidth = formatExportDimension(request.getWidth() * calibration.getPixelWidthMicrons());
+            String physicalHeight = formatExportDimension(request.getHeight() * calibration.getPixelHeightMicrons());
+            Dialogs.showInfoNotification(TITLE, "Exported " + request.getWidth() + " × " + request.getHeight()
+                    + " pixels (" + physicalWidth + " × " + physicalHeight + " µm): "
+                    + destination.getAbsolutePath());
         } catch (IOException | RuntimeException exception) {
             logger.error("Failed to export selected region to {}", destination, exception);
             Dialogs.showErrorMessage(TITLE, exception);
         }
     }
 
-    static void writeCalibratedRegion(ImageServer<BufferedImage> server, ROI roi, File destination) throws IOException {
+    static RegionRequest writeCalibratedRegion(ImageServer<BufferedImage> server, ROI roi, File destination) throws IOException {
         var rotated = RotatedRectangle.from(roi);
         ImageServer<BufferedImage> exportServer = server;
         RegionRequest request;
         if (rotated == null) {
-            request = RegionRequest.createInstance(server.getPath(), 1.0, roi);
+            // Bounding-box requests round the left/top down and right/bottom up,
+            // which can add one or two unwanted border pixels for fractional ROIs.
+            int width = Math.toIntExact(Math.round(roi.getBoundsWidth()));
+            int height = Math.toIntExact(Math.round(roi.getBoundsHeight()));
+            if (width < 1 || height < 1 || width > server.getWidth() || height > server.getHeight())
+                throw new IOException("The selected region has no valid native-resolution pixel dimensions.");
+            int x = (int) Math.max(0, Math.min(Math.round(roi.getBoundsX()), server.getWidth() - width));
+            int y = (int) Math.max(0, Math.min(Math.round(roi.getBoundsY()), server.getHeight() - height));
+            request = RegionRequest.createInstance(server.getPath(), 1.0,
+                    x, y, width, height, roi.getZ(), roi.getT());
         } else {
             var calibration = server.getPixelCalibration();
             double pixelWidth = calibration.getPixelWidthMicrons();
@@ -236,6 +250,12 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
                 ? OMEPyramidWriter.CompressionType.LZW
                 : OMEPyramidWriter.CompressionType.UNCOMPRESSED;
         OMEPyramidWriter.writeImage(exportServer, destination.getAbsolutePath(), compression, request);
+        return request;
+    }
+
+    private static String formatExportDimension(double micrometers) {
+        return BigDecimal.valueOf(micrometers).setScale(3, RoundingMode.HALF_UP)
+                .stripTrailingZeros().toPlainString();
     }
 
     private record RotatedRectangle(int width, int height, AffineTransform transform) {

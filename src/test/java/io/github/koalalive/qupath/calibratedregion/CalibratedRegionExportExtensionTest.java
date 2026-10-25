@@ -35,7 +35,9 @@ class CalibratedRegionExportExtensionTest {
             var roi = ROIs.createRectangleROI(10, 8, 20, 12, ImagePlane.getDefaultPlane());
             var output = tempDir.resolve("selected.ome.tif").toFile();
 
-            CalibratedRegionExportExtension.writeCalibratedRegion(server, roi, output);
+            var request = CalibratedRegionExportExtension.writeCalibratedRegion(server, roi, output);
+            assertEquals(20, request.getWidth());
+            assertEquals(12, request.getHeight());
 
             try (var reader = new OMETiffReader()) {
                 var metadata = MetadataTools.createOMEXMLMetadata();
@@ -45,6 +47,26 @@ class CalibratedRegionExportExtensionTest {
                 assertEquals(12, reader.getSizeY());
                 assertEquals(0.5, metadata.getPixelsPhysicalSizeX(0).value().doubleValue(), 1e-9);
                 assertEquals(0.75, metadata.getPixelsPhysicalSizeY(0).value().doubleValue(), 1e-9);
+            }
+        }
+    }
+
+    @Test
+    void fractionalRectangleBoundsDoNotAddBorderPixels() throws Exception {
+        var pixels = new BufferedImage(64, 48, BufferedImage.TYPE_INT_RGB);
+        try (var server = new WrappedBufferedImageServer("fractional-slide", pixels)) {
+            server.setMetadata(new ImageServerMetadata.Builder(server.getMetadata())
+                    .pixelSizeMicrons(0.5, 0.75)
+                    .build());
+            var roi = ROIs.createRectangleROI(10.4, 8.4, 20.2, 12.2, ImagePlane.getDefaultPlane());
+            var output = tempDir.resolve("fractional.ome.tif").toFile();
+
+            CalibratedRegionExportExtension.writeCalibratedRegion(server, roi, output);
+
+            try (var reader = new OMETiffReader()) {
+                reader.setId(output.getAbsolutePath());
+                assertEquals(20, reader.getSizeX());
+                assertEquals(12, reader.getSizeY());
             }
         }
     }
@@ -82,6 +104,28 @@ class CalibratedRegionExportExtensionTest {
             int center = exported.getRGB(10, 6);
             assertEquals(32 * 3, (center >> 16) & 0xff, 6);
             assertEquals(24 * 5, (center >> 8) & 0xff, 10);
+        }
+    }
+
+    @Test
+    void fractionalRotatedRectangleUsesRoundedSideLengths() throws Exception {
+        var pixels = new BufferedImage(64, 48, BufferedImage.TYPE_INT_RGB);
+        try (var server = new WrappedBufferedImageServer("fractional-rotated-slide", pixels)) {
+            server.setMetadata(new ImageServerMetadata.Builder(server.getMetadata())
+                    .pixelSizeMicrons(0.5, 0.5)
+                    .build());
+            var rectangle = ROIs.createRectangleROI(22.4, 18.4, 20.2, 12.2, ImagePlane.getDefaultPlane());
+            var rotated = RoiTools.transformROI(rectangle, AffineTransform.getRotateInstance(
+                    Math.PI / 4, rectangle.getCentroidX(), rectangle.getCentroidY()));
+            var output = tempDir.resolve("fractional-rotated.ome.tif").toFile();
+
+            CalibratedRegionExportExtension.writeCalibratedRegion(server, rotated, output);
+
+            try (var reader = new OMETiffReader()) {
+                reader.setId(output.getAbsolutePath());
+                assertEquals(20, reader.getSizeX());
+                assertEquals(12, reader.getSizeY());
+            }
         }
     }
 
