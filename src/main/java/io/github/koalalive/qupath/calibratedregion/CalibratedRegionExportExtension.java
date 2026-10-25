@@ -15,6 +15,7 @@ import qupath.lib.common.Version;
 import qupath.lib.gui.QuPathGUI;
 import qupath.lib.gui.extensions.QuPathExtension;
 import qupath.lib.images.servers.ImageServer;
+import qupath.lib.images.servers.ImageServerMetadata;
 import qupath.lib.images.servers.TransformedServerBuilder;
 import qupath.lib.images.writers.ome.OMEPyramidWriter;
 import qupath.lib.objects.PathObjects;
@@ -37,6 +38,7 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
     private static final String TITLE = "Calibrated Region Export";
     private static final double DEFAULT_WIDTH_UM = 1000.0;
     private static final double DEFAULT_HEIGHT_UM = 600.0;
+    private static final double MAX_ROTATED_ANISOTROPY_FRACTION = 0.001;
     private double lastWidthUm = DEFAULT_WIDTH_UM;
     private double lastHeightUm = DEFAULT_HEIGHT_UM;
     private boolean installed;
@@ -201,8 +203,13 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
 
         try {
             var request = writeCalibratedRegion(server, roi, destination);
-            String physicalWidth = formatExportDimension(request.getWidth() * calibration.getPixelWidthMicrons());
-            String physicalHeight = formatExportDimension(request.getHeight() * calibration.getPixelHeightMicrons());
+            var rotated = RotatedRectangle.from(roi);
+            double outputPixelWidth = rotated == null ? calibration.getPixelWidthMicrons()
+                    : rotated.pixelWidthMicrons(calibration.getPixelWidthMicrons(), calibration.getPixelHeightMicrons());
+            double outputPixelHeight = rotated == null ? calibration.getPixelHeightMicrons()
+                    : rotated.pixelHeightMicrons(calibration.getPixelWidthMicrons(), calibration.getPixelHeightMicrons());
+            String physicalWidth = formatExportDimension(request.getWidth() * outputPixelWidth);
+            String physicalHeight = formatExportDimension(request.getHeight() * outputPixelHeight);
             Dialogs.showInfoNotification(TITLE, "Exported " + request.getWidth() + " × " + request.getHeight()
                     + " pixels (" + physicalWidth + " × " + physicalHeight + " µm): "
                     + destination.getAbsolutePath());
@@ -231,16 +238,25 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
             var calibration = server.getPixelCalibration();
             double pixelWidth = calibration.getPixelWidthMicrons();
             double pixelHeight = calibration.getPixelHeightMicrons();
-            if (Math.abs(pixelWidth - pixelHeight) > Math.max(pixelWidth, pixelHeight) * 1e-6)
-                throw new IOException("Rotated export requires equal X and Y pixel sizes. This image has "
-                        + pixelWidth + " × " + pixelHeight + " µm/px; QuPath cannot preserve its physical "
-                        + "calibration after rotating the image.");
+            if (!Double.isFinite(pixelWidth) || !Double.isFinite(pixelHeight)
+                    || pixelWidth <= 0 || pixelHeight <= 0)
+                throw new IOException("The source image has no valid X/Y pixel size in micrometers.");
+            double anisotropy = Math.abs(pixelWidth - pixelHeight) / ((pixelWidth + pixelHeight) / 2);
+            if (anisotropy > MAX_ROTATED_ANISOTROPY_FRACTION)
+                throw new IOException("Rotated export supports X/Y pixel-size differences up to 0.1%. "
+                        + "This image differs by " + formatExportDimension(anisotropy * 100) + "%. "
+                        + "A larger difference cannot be represented faithfully by OME-TIFF X/Y pixel sizes.");
             exportServer = new TransformedServerBuilder(server).transform(rotated.transform()).build();
+            double outputPixelWidth = rotated.pixelWidthMicrons(pixelWidth, pixelHeight);
+            double outputPixelHeight = rotated.pixelHeightMicrons(pixelWidth, pixelHeight);
+            exportServer.setMetadata(new ImageServerMetadata.Builder(exportServer.getMetadata())
+                    .pixelSizeMicrons(outputPixelWidth, outputPixelHeight)
+                    .build());
             var outputCalibration = exportServer.getPixelCalibration();
             if (!Double.isFinite(outputCalibration.getPixelWidthMicrons())
                     || !Double.isFinite(outputCalibration.getPixelHeightMicrons())
-                    || Math.abs(outputCalibration.getPixelWidthMicrons() - pixelWidth) > pixelWidth * 1e-6
-                    || Math.abs(outputCalibration.getPixelHeightMicrons() - pixelHeight) > pixelHeight * 1e-6)
+                    || Math.abs(outputCalibration.getPixelWidthMicrons() - outputPixelWidth) > outputPixelWidth * 1e-6
+                    || Math.abs(outputCalibration.getPixelHeightMicrons() - outputPixelHeight) > outputPixelHeight * 1e-6)
                 throw new IOException("QuPath did not preserve the source pixel calibration after rotation. "
                         + "The region was not exported.");
             request = RegionRequest.createInstance(exportServer.getPath(), 1.0, 0, 0,
@@ -259,7 +275,15 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
                 .stripTrailingZeros().toPlainString();
     }
 
-    private record RotatedRectangle(int width, int height, AffineTransform transform) {
+    private record RotatedRectangle(int width, int height, AffineTransform transform, double ux, double uy) {
+        double pixelWidthMicrons(double sourceX, double sourceY) {
+            return Math.hypot(ux * sourceX, uy * sourceY);
+        }
+
+        double pixelHeightMicrons(double sourceX, double sourceY) {
+            return Math.hypot(uy * sourceX, ux * sourceY);
+        }
+
         static RotatedRectangle from(ROI roi) {
             if (roi instanceof RectangleROI)
                 return null;
@@ -293,7 +317,7 @@ public final class CalibratedRegionExportExtension implements QuPathExtension {
             var transform = new AffineTransform(ux, vx, uy, vy,
                     -ux * topLeft.getX() - uy * topLeft.getY(),
                     -vx * topLeft.getX() - vy * topLeft.getY());
-            return new RotatedRectangle((int) Math.round(width), (int) Math.round(height), transform);
+            return new RotatedRectangle((int) Math.round(width), (int) Math.round(height), transform, ux, uy);
         }
     }
 

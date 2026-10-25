@@ -154,8 +154,43 @@ class CalibratedRegionExportExtensionTest {
 
             var error = assertThrows(IOException.class,
                     () -> CalibratedRegionExportExtension.writeCalibratedRegion(server, rotated, output));
-            assertTrue(error.getMessage().contains("equal X and Y pixel sizes"));
+            assertTrue(error.getMessage().contains("up to 0.1%"));
             assertFalse(output.exists());
+        }
+    }
+
+    @Test
+    void ndpiLikePixelSizesRetainCalibratedRotatedExport() throws Exception {
+        double sourceX = 0.2299484915378955;
+        double sourceY = 0.22999609006646887;
+        var pixels = new BufferedImage(64, 48, BufferedImage.TYPE_INT_RGB);
+        try (var server = new WrappedBufferedImageServer("ndpi-like-slide", pixels)) {
+            server.setMetadata(new ImageServerMetadata.Builder(server.getMetadata())
+                    .pixelSizeMicrons(sourceX, sourceY)
+                    .build());
+            var rectangle = ROIs.createRectangleROI(22, 18, 20, 12, ImagePlane.getDefaultPlane());
+            var rotated = RoiTools.transformROI(rectangle, AffineTransform.getRotateInstance(
+                    Math.PI / 6, rectangle.getCentroidX(), rectangle.getCentroidY()));
+            var output = tempDir.resolve("ndpi-like.ome.tif").toFile();
+
+            CalibratedRegionExportExtension.writeCalibratedRegion(server, rotated, output);
+
+            assertEquals(sourceX, server.getPixelCalibration().getPixelWidthMicrons(), 1e-12);
+            assertEquals(sourceY, server.getPixelCalibration().getPixelHeightMicrons(), 1e-12);
+
+            try (var reader = new OMETiffReader()) {
+                var metadata = MetadataTools.createOMEXMLMetadata();
+                reader.setMetadataStore(metadata);
+                reader.setId(output.getAbsolutePath());
+                assertEquals(20, reader.getSizeX());
+                assertEquals(12, reader.getSizeY());
+                double cosine = Math.cos(Math.PI / 6);
+                double sine = Math.sin(Math.PI / 6);
+                assertEquals(Math.hypot(cosine * sourceX, sine * sourceY),
+                        metadata.getPixelsPhysicalSizeX(0).value().doubleValue(), 1e-9);
+                assertEquals(Math.hypot(sine * sourceX, cosine * sourceY),
+                        metadata.getPixelsPhysicalSizeY(0).value().doubleValue(), 1e-9);
+            }
         }
     }
 
